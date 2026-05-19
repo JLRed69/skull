@@ -41,6 +41,23 @@ const MOTION_MODES = [
   { id: 'gyro',   label: 'Gyro' },
 ];
 
+// ── Web Bluetooth UUIDs (must match ESP32 firmware) ───────────
+const BLE_SERVICE_UUID   = '7a0247e7-8e88-409b-a959-ab5092ddb03e';
+const BLE_CHAR_TELEM     = '7a0247e8-8e88-409b-a959-ab5092ddb03e'; // notify  ESP32 → phone
+const BLE_CHAR_CMD       = '7a0247e9-8e88-409b-a959-ab5092ddb03e'; // write   phone → ESP32
+
+// Telemetry packet (8 bytes, little-endian):
+//   int16 rx*1000, int16 ry*1000, int16 rz*1000, uint16 intensity*65535
+function parseTelemetry(dv) {
+  if (!dv || dv.byteLength < 8) return null;
+  return {
+    x: dv.getInt16(0, true) / 1000,
+    y: dv.getInt16(2, true) / 1000,
+    z: dv.getInt16(4, true) / 1000,
+    intensity: dv.getUint16(6, true) / 65535,
+  };
+}
+
 // ── Live ticking digits ───────────────────────────────────────
 function Digit({ v, pad = 5 }) {
   const sign = v < 0 ? '−' : ' ';
@@ -84,31 +101,51 @@ function SignalBars({ rssi = -55, color = '#7FDBFF' }) {
 }
 
 // ── Connection / Status pill ──────────────────────────────────
-function BLEPill({ state, paletteDot, rssi, deviceName }) {
+function BLEPill({ state, paletteDot, rssi, deviceName, onTap }) {
   const isConn = state === 'connected';
+  const isWaiting = state === 'scanning' || state === 'connecting';
+  const isError = state === 'error';
+  const isSim = state === 'sim';
+  const dotColor = isConn ? '#3CE08E'
+    : isWaiting ? '#FFD25A'
+    : isError ? '#FF5470'
+    : '#888';
+  const label = isConn ? 'BLE · LIVE'
+    : isWaiting ? (state === 'scanning' ? 'BLE · SCAN' : 'BLE · GATT')
+    : isError ? 'BLE · ERR'
+    : 'BLE · SIM';
+  const sub = isConn ? deviceName
+    : isWaiting ? 'Connecting…'
+    : isError ? 'Tap to retry'
+    : 'Tap to connect';
   return (
-    <div style={{
-      display: 'inline-flex', alignItems: 'center', gap: 12,
-      padding: '9px 14px 9px 12px', borderRadius: 999,
-      background: 'rgba(15,18,26,0.55)',
-      backdropFilter: 'blur(18px) saturate(150%)',
-      WebkitBackdropFilter: 'blur(18px) saturate(150%)',
-      border: '0.5px solid rgba(255,255,255,0.10)',
-      boxShadow: '0 8px 28px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06)',
-      color: 'rgba(235,240,250,0.92)', fontFamily: 'var(--font-mono)', fontSize: 11,
-      letterSpacing: '0.08em',
-    }}>
-      <Pulse color={isConn ? paletteDot : '#888'} />
-      <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.15 }}>
-        <span style={{ fontSize: 9, opacity: 0.55, letterSpacing: '0.18em' }}>BLE · GATT</span>
-        <span style={{ fontSize: 11.5, fontWeight: 500 }}>{deviceName}</span>
+    <button
+      onClick={onTap}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 12,
+        padding: '9px 14px 9px 12px', borderRadius: 999,
+        background: 'rgba(15,18,26,0.55)',
+        backdropFilter: 'blur(18px) saturate(150%)',
+        WebkitBackdropFilter: 'blur(18px) saturate(150%)',
+        border: `0.5px solid ${isConn ? '#3CE08E55' : 'rgba(255,255,255,0.10)'}`,
+        boxShadow: isConn
+          ? '0 8px 28px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06), 0 0 22px #3CE08E33'
+          : '0 8px 28px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06)',
+        color: 'rgba(235,240,250,0.92)', fontFamily: 'var(--font-mono)', fontSize: 11,
+        letterSpacing: '0.08em', cursor: 'pointer',
+        WebkitTapHighlightColor: 'transparent',
+      }}>
+      <Pulse color={dotColor} />
+      <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.15, textAlign: 'left' }}>
+        <span style={{ fontSize: 9, opacity: 0.55, letterSpacing: '0.18em' }}>{label}</span>
+        <span style={{ fontSize: 11.5, fontWeight: 500 }}>{sub}</span>
       </div>
       <div style={{ width: 1, height: 22, background: 'rgba(255,255,255,0.08)' }} />
-      <SignalBars rssi={rssi} color={paletteDot} />
+      <SignalBars rssi={rssi} color={dotColor} />
       <span style={{ fontSize: 10, opacity: 0.65, fontVariantNumeric: 'tabular-nums' }}>
-        {rssi.toFixed(0)} dBm
+        {isConn ? 'live' : `${rssi.toFixed(0)} dBm`}
       </span>
-    </div>
+    </button>
   );
 }
 
@@ -353,6 +390,78 @@ function App() {
   // Touch drag state
   const touchState = useRef({ active: false, rx: 0, ry: 0, lx: 0, ly: 0 });
 
+  // ── BLE (Web Bluetooth) ──
+  const [bleState, setBleState] = useState('sim'); // sim | scanning | connecting | connected | error
+  const [bleDevice, setBleDevice] = useState(null);
+  const [bleError, setBleError] = useState(null);
+  const bleCharRef = useRef(null);
+  const bleDeviceRef = useRef(null);
+  const bleDataRef = useRef({ x: 0, y: 0, z: 0, intensity: 0 });
+  const bleConnectedRef = useRef(false);
+
+  const onBleNotify = useCallback((e) => {
+    const parsed = parseTelemetry(e.target.value);
+    if (parsed) bleDataRef.current = parsed;
+  }, []);
+
+  const onBleDisconnect = useCallback(() => {
+    bleConnectedRef.current = false;
+    bleCharRef.current = null;
+    bleDeviceRef.current = null;
+    setBleDevice(null);
+    setBleState(s => s === 'connected' ? 'sim' : s);
+  }, []);
+
+  const connectBLE = useCallback(async () => {
+    setBleError(null);
+    if (!navigator.bluetooth) {
+      setBleError('Web Bluetooth no soportado. Usa Bluefy en iOS o Chrome en Android/Desktop.');
+      setBleState('error');
+      return;
+    }
+    try {
+      setBleState('scanning');
+      const device = await navigator.bluetooth.requestDevice({
+        filters: [{ namePrefix: 'ESP32-SKULL' }],
+        optionalServices: [BLE_SERVICE_UUID],
+      });
+      bleDeviceRef.current = device;
+      setBleDevice(device);
+      device.addEventListener('gattserverdisconnected', onBleDisconnect);
+      setBleState('connecting');
+      const server = await device.gatt.connect();
+      const service = await server.getPrimaryService(BLE_SERVICE_UUID);
+      const telemChar = await service.getCharacteristic(BLE_CHAR_TELEM);
+      await telemChar.startNotifications();
+      telemChar.addEventListener('characteristicvaluechanged', onBleNotify);
+      bleCharRef.current = telemChar;
+      bleConnectedRef.current = true;
+      setBleState('connected');
+    } catch (err) {
+      console.warn('BLE connect failed:', err);
+      setBleError(err.message || String(err));
+      setBleState('error');
+      bleConnectedRef.current = false;
+    }
+  }, [onBleNotify, onBleDisconnect]);
+
+  const disconnectBLE = useCallback(() => {
+    try { bleCharRef.current?.stopNotifications?.(); } catch {}
+    try { bleDeviceRef.current?.gatt?.disconnect?.(); } catch {}
+    bleConnectedRef.current = false;
+    bleCharRef.current = null;
+    bleDeviceRef.current = null;
+    setBleDevice(null);
+    setBleState('sim');
+  }, []);
+
+  const onBlePillTap = useCallback(() => {
+    if (bleState === 'connected') disconnectBLE();
+    else if (bleState === 'scanning' || bleState === 'connecting') {} // ignore
+    else connectBLE();
+  }, [bleState, connectBLE, disconnectBLE]);
+
+
   // ── Initialize engine when ready ──
   useEffect(() => {
     let cancelled = false;
@@ -426,14 +535,20 @@ function App() {
       if (eng) {
         const amp = amplifyingRef.current ? 1.8 : 1.0;
         if (motionModeRef.current === 'sim') {
-          simT += dt;
-          const s = swayStrengthRef.current * amp;
-          // Simulated MPU6050 stream — gentle drift on each axis with occasional gusts
-          const gust = Math.max(0, Math.sin(simT * 0.35) - 0.6) * 2.5;
-          const x = Math.sin(simT * 0.7) * 0.35 * s + Math.sin(simT * 1.9 + 1.3) * 0.12 * s;
-          const y = Math.sin(simT * 0.9 + 1.1) * 0.55 * s + Math.cos(simT * 0.4) * 0.1 * s + gust * 0.35;
-          const z = Math.sin(simT * 0.55 + 2.1) * 0.18 * s;
-          eng.setRotation(x, y, z);
+          if (bleConnectedRef.current) {
+            // Real telemetry from ESP32 — feed rotation directly.
+            const d = bleDataRef.current;
+            eng.setRotation(d.x * amp, d.y * amp, d.z * amp);
+          } else {
+            simT += dt;
+            const s = swayStrengthRef.current * amp;
+            // Simulated MPU6050 stream — gentle drift on each axis with occasional gusts
+            const gust = Math.max(0, Math.sin(simT * 0.35) - 0.6) * 2.5;
+            const x = Math.sin(simT * 0.7) * 0.35 * s + Math.sin(simT * 1.9 + 1.3) * 0.12 * s;
+            const y = Math.sin(simT * 0.9 + 1.1) * 0.55 * s + Math.cos(simT * 0.4) * 0.1 * s + gust * 0.35;
+            const z = Math.sin(simT * 0.55 + 2.1) * 0.18 * s;
+            eng.setRotation(x, y, z);
+          }
         } else if (motionModeRef.current === 'gyro') {
           eng.setRotation(gyroX * amp, gyroY * amp, gyroZ * amp);
         } else {
@@ -621,10 +736,11 @@ function App() {
               display: 'flex', justifyContent: 'center', zIndex: 12,
             }}>
               <BLEPill
-                state={phase === 'done' ? 'connected' : 'pairing'}
+                state={bleState}
                 paletteDot={palette.dot}
                 rssi={rssi}
-                deviceName="ESP32-SKULL · 24:6F:28"
+                deviceName={bleDevice?.name || 'ESP32-SKULL'}
+                onTap={onBlePillTap}
               />
             </div>
 
