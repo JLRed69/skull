@@ -146,7 +146,7 @@ function HUD({ telem, motionMode, paletteDot, onModeChange, onAmplifyDown, onAmp
   const rot = telem?.rotation ?? { x: 0, y: 0, z: 0 };
   return (
     <div style={{
-      position: 'absolute', left: 14, right: 14, bottom: 44,
+      position: 'absolute', left: 14, right: 14, bottom: RAW_MODE ? 18 : 44,
       borderRadius: 22, overflow: 'hidden',
       background: 'rgba(10,12,18,0.62)',
       backdropFilter: 'blur(22px) saturate(160%)',
@@ -327,7 +327,8 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "particleAmount": 1.0,
   "bloomBase": 0.5,
   "autoSwayStrength": 0.6,
-  "backgroundStyle": "void"
+  "backgroundStyle": "void",
+  "zoom": 1.0
 }/*EDITMODE-END*/;
 
 // ── Main app ──────────────────────────────────────────────────
@@ -373,6 +374,7 @@ function App() {
       eng.setEffect(t.effect);
       eng.setParticleMultiplier(t.particleAmount);
       eng.setBloomStrength(t.bloomBase);
+      eng.setZoom?.(t.zoom);
     };
     if (window.SkullEngine) start();
     else window.addEventListener('skull-engine-ready', start, { once: true });
@@ -398,6 +400,10 @@ function App() {
     const eng = engineRef.current; if (!eng) return;
     eng.setBloomStrength(t.bloomBase);
   }, [t.bloomBase]);
+  useEffect(() => {
+    const eng = engineRef.current; if (!eng) return;
+    eng.setZoom?.(t.zoom);
+  }, [t.zoom]);
 
   // ── Motion source: drive engine.setRotation each frame ──
   useEffect(() => {
@@ -459,25 +465,72 @@ function App() {
     };
   }, [motionMode]);
 
-  // ── Touch drag on the canvas ──
-  const onCanvasPointerDown = useCallback((e) => {
-    if (motionModeRef.current !== 'touch') return;
-    const tt = touchState.current;
-    tt.active = true; tt.lx = e.clientX; tt.ly = e.clientY;
-    e.currentTarget.setPointerCapture(e.pointerId);
+  // ── Touch drag + pinch-to-zoom on the canvas ──
+  // Tracks active pointers in a map. 1 pointer + 'touch' mode → rotate.
+  // 2 pointers (any mode) → pinch-zoom; suppresses rotation while pinching.
+  const pointersRef = useRef(new Map());
+  const pinchRef = useRef({ baseDist: 0, baseZoom: 1, current: 1 });
+  const [zoomHud, setZoomHud] = useState(0); // 0 = hidden, else timestamp
+  const zoomHudTimerRef = useRef(null);
+  const liveZoomRef = useRef(t.zoom);
+  liveZoomRef.current = t.zoom;
+
+  const showZoomHud = useCallback((z) => {
+    pinchRef.current.current = z;
+    setZoomHud(Date.now());
+    clearTimeout(zoomHudTimerRef.current);
+    zoomHudTimerRef.current = setTimeout(() => setZoomHud(0), 900);
   }, []);
+
+  const onCanvasPointerDown = useCallback((e) => {
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+    if (pointersRef.current.size === 2) {
+      const [a, b] = [...pointersRef.current.values()];
+      pinchRef.current.baseDist = Math.hypot(b.x - a.x, b.y - a.y);
+      pinchRef.current.baseZoom = liveZoomRef.current;
+      // Cancel any in-progress rotation drag
+      touchState.current.active = false;
+    } else if (motionModeRef.current === 'touch') {
+      const tt = touchState.current;
+      tt.active = true; tt.lx = e.clientX; tt.ly = e.clientY;
+    }
+  }, []);
+
   const onCanvasPointerMove = useCallback((e) => {
+    if (!pointersRef.current.has(e.pointerId)) return;
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointersRef.current.size >= 2 && pinchRef.current.baseDist > 0) {
+      const pts = [...pointersRef.current.values()];
+      const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+      const factor = dist / pinchRef.current.baseDist;
+      const z = Math.max(0.5, Math.min(2.2, pinchRef.current.baseZoom * factor));
+      const eng = engineRef.current;
+      if (eng) eng.setZoom?.(z);
+      liveZoomRef.current = z;
+      showZoomHud(z);
+      return;
+    }
     const tt = touchState.current;
     if (!tt.active) return;
     const dx = (e.clientX - tt.lx) / 100;
     const dy = (e.clientY - tt.ly) / 100;
     tt.ry += dx; tt.rx += dy;
     tt.lx = e.clientX; tt.ly = e.clientY;
-  }, []);
+  }, [showZoomHud]);
+
   const onCanvasPointerUp = useCallback((e) => {
+    const hadPinch = pointersRef.current.size >= 2;
+    pointersRef.current.delete(e.pointerId);
     const tt = touchState.current; tt.active = false;
+    if (hadPinch && pointersRef.current.size < 2) {
+      pinchRef.current.baseDist = 0;
+      // Persist the final zoom into the tweak so it survives reload
+      const z = Math.round(liveZoomRef.current * 100) / 100;
+      if (z !== t.zoom) setTweak('zoom', z);
+    }
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
-  }, []);
+  }, [t.zoom, setTweak]);
 
   // ── Fake RSSI fluctuation ──
   useEffect(() => {
@@ -545,7 +598,7 @@ function App() {
 
             {/* Top brand row */}
             <div style={{
-              position: 'absolute', top: 64, left: 18, right: 18,
+              position: 'absolute', top: RAW_MODE ? 18 : 64, left: 18, right: 18,
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               zIndex: 12,
             }}>
@@ -564,7 +617,7 @@ function App() {
 
             {/* BLE pill */}
             <div style={{
-              position: 'absolute', top: 112, left: 0, right: 0,
+              position: 'absolute', top: RAW_MODE ? 60 : 112, left: 0, right: 0,
               display: 'flex', justifyContent: 'center', zIndex: 12,
             }}>
               <BLEPill
@@ -577,7 +630,7 @@ function App() {
 
             {/* palette label, small */}
             <div style={{
-              position: 'absolute', top: 162, left: 0, right: 0,
+              position: 'absolute', top: RAW_MODE ? 108 : 162, left: 0, right: 0,
               textAlign: 'center', zIndex: 12,
               fontFamily: 'var(--font-mono)', fontSize: 9,
               letterSpacing: '0.32em', textTransform: 'uppercase',
@@ -599,6 +652,27 @@ function App() {
 
             {/* Boot overlay */}
             <BootOverlay phase={phase} paletteDot={palette.dot} />
+
+            {/* Pinch-zoom indicator */}
+            {zoomHud > 0 && (
+              <div style={{
+                position: 'absolute', top: '50%', left: '50%',
+                transform: 'translate(-50%, -50%)',
+                padding: '10px 18px', borderRadius: 14,
+                background: 'rgba(10,12,18,0.78)',
+                border: '0.5px solid rgba(255,255,255,0.1)',
+                backdropFilter: 'blur(14px)',
+                WebkitBackdropFilter: 'blur(14px)',
+                color: palette.dot,
+                fontFamily: 'var(--font-mono)',
+                fontSize: 16, letterSpacing: '0.08em',
+                boxShadow: `0 0 24px ${palette.dot}55`,
+                pointerEvents: 'none', zIndex: 25,
+                fontVariantNumeric: 'tabular-nums',
+              }}>
+                ZOOM · {pinchRef.current.current.toFixed(2)}×
+              </div>
+            )}
         </div>
   );
 
@@ -652,6 +726,8 @@ function App() {
                      onChange={v => setTweak('particleAmount', v)} />
         <TweakSlider label="Bloom" value={t.bloomBase} min={0.2} max={1.6} step={0.05}
                      onChange={v => setTweak('bloomBase', v)} />
+        <TweakSlider label="Zoom" value={t.zoom} min={0.5} max={2.2} step={0.05}
+                     onChange={v => setTweak('zoom', v)} />
         <TweakSection label="Motion" />
         <TweakSlider label="Sway power" value={t.autoSwayStrength} min={0.0} max={1.5} step={0.05}
                      onChange={v => setTweak('autoSwayStrength', v)} />

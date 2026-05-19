@@ -498,6 +498,12 @@ class SkullEngine {
   }
   setBloomStrength(s) { this._bloomBase = s; }
   setParticleMultiplier(m) { this.particleMultiplier = m; }
+  setZoom(z) {
+    // z = 1.0 default. Higher = closer (bigger skull).
+    const base = 8.5;
+    this.camera.position.z = base / Math.max(0.3, z);
+    this.camera.updateProjectionMatrix();
+  }
 
   _loop() {
     requestAnimationFrame(this._loop);
