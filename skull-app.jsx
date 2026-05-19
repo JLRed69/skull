@@ -3,6 +3,22 @@
 
 const { useState, useEffect, useRef, useMemo, useCallback, Fragment } = React;
 
+// ── Fullscreen detection ──────────────────────────────────────
+// On real mobile devices, or when ?raw=1 is in the URL, we drop the iPhone
+// bezel and the page background and let the screen content fill the viewport.
+const RAW_MODE = (() => {
+  try {
+    const qs = new URLSearchParams(location.search);
+    if (qs.has('raw') || qs.has('fullscreen')) return true;
+    if (qs.has('frame')) return false; // explicit override to show the frame
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+      || window.navigator.standalone === true;
+    const isTouch = window.matchMedia('(pointer: coarse)').matches;
+    const isNarrow = window.innerWidth < 700;
+    return isStandalone || (isTouch && isNarrow);
+  } catch { return false; }
+})();
+
 // ── Palettes ──────────────────────────────────────────────────
 const PALETTES = {
   aether:  { name: 'Aether',  a: '#7FDBFF', b: '#FF3D6E', dot: '#7FDBFF', label: 'Cold spectre' },
@@ -497,20 +513,10 @@ function App() {
   // intensity-driven vignette accent over the iPhone screen
   const accentGlow = telem.intensity > 0.25;
 
-  return (
-    <div>
-      {/* Page background (outside phone) */}
-      <PageBackground />
-
-      <div style={{
-        position: 'fixed', inset: 0, display: 'flex',
-        alignItems: 'center', justifyContent: 'center',
-      }}>
-        <PhoneScaler width={402} height={874}>
-        <IOSDevice width={402} height={874} dark={true}>
-          <div style={{
-            position: 'absolute', inset: 0, background: bg, overflow: 'hidden',
-          }}>
+  const screen = (
+        <div style={{
+          position: 'absolute', inset: 0, background: bg, overflow: 'hidden',
+        }}>
             {/* 3D canvas */}
             <canvas
               ref={canvasRef}
@@ -593,10 +599,38 @@ function App() {
 
             {/* Boot overlay */}
             <BootOverlay phase={phase} paletteDot={palette.dot} />
+        </div>
+  );
+
+  return (
+    <div>
+      {RAW_MODE ? (
+        <div style={{
+          position: 'fixed',
+          top: 'env(safe-area-inset-top)',
+          bottom: 'env(safe-area-inset-bottom)',
+          left: 'env(safe-area-inset-left)',
+          right: 'env(safe-area-inset-right)',
+          background: '#04050a',
+          overflow: 'hidden',
+        }}>
+          {screen}
+        </div>
+      ) : (
+        <>
+          <PageBackground />
+          <div style={{
+            position: 'fixed', inset: 0, display: 'flex',
+            alignItems: 'center', justifyContent: 'center',
+          }}>
+            <PhoneScaler width={402} height={874}>
+              <IOSDevice width={402} height={874} dark={true}>
+                {screen}
+              </IOSDevice>
+            </PhoneScaler>
           </div>
-        </IOSDevice>
-        </PhoneScaler>
-      </div>
+        </>
+      )}
 
       {/* Tweaks panel */}
       <TweaksPanel title="Tweaks">
