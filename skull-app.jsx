@@ -39,6 +39,7 @@ const MOTION_MODES = [
   { id: 'sim',    label: 'BLE Sim' },
   { id: 'touch',  label: 'Touch' },
   { id: 'gyro',   label: 'Gyro' },
+  { id: 'face',   label: 'Face' },
 ];
 
 // ── Web Bluetooth UUIDs (must match ESP32 firmware) ───────────
@@ -146,6 +147,229 @@ function BLEPill({ state, paletteDot, rssi, deviceName, onTap }) {
         {isConn ? 'live' : `${rssi.toFixed(0)} dBm`}
       </span>
     </button>
+  );
+}
+
+// ── Tiny eye icon previews (one per type) ─────────────────────
+function EyeIcon({ type, size = 22, on = false }) {
+  const w = size, h = size * 0.7;
+  const cx = w / 2, cy = h / 2;
+  const rx = w * 0.42, ry = h * 0.42; // outer eye-shape radius
+  // Sclera + iris colours per type
+  const cfgs = {
+    'normal':    { sclera: '#e8e0cf', iris: '#3f7ac8', pupil: '#0a0a0e', shape: 'round',  glow: null },
+    'cat':       { sclera: '#fff3d2', iris: '#d9b13a', pupil: '#0a0a0e', shape: 'slit',   glow: null },
+    'devil':     { sclera: '#1e0404', iris: '#a00000', pupil: '#0a0a0e', shape: 'slit',   glow: '#ff2828' },
+    'lizard':    { sclera: '#e6e8b8', iris: '#6cc26c', pupil: '#0a0a0e', shape: 'thin',   glow: null },
+    'term-red':  { sclera: '#0a0303', iris: '#1a0202', pupil: '#ff2020', shape: 'glow',   glow: '#ff2020' },
+    'term-blue': { sclera: '#03060c', iris: '#020216', pupil: '#4ec0ff', shape: 'glow',   glow: '#4ec0ff' },
+  };
+  const cfg = cfgs[type] || cfgs.normal;
+  const irisR = h * 0.30;
+  const pupilCircle = h * 0.13;
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${w} ${h + 4}`} style={{ display: 'block' }}>
+      <defs>
+        {cfg.glow && (
+          <radialGradient id={`g-${type}-${on ? 'on' : 'off'}`} cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor={cfg.glow} stopOpacity="0.9" />
+            <stop offset="60%" stopColor={cfg.glow} stopOpacity="0.15" />
+            <stop offset="100%" stopColor={cfg.glow} stopOpacity="0" />
+          </radialGradient>
+        )}
+      </defs>
+      {/* almond eye-shape via two arcs */}
+      <path
+        d={`M ${cx - rx} ${cy} Q ${cx} ${cy - ry * 1.5} ${cx + rx} ${cy} Q ${cx} ${cy + ry * 1.5} ${cx - rx} ${cy} Z`}
+        fill={cfg.sclera}
+        stroke="rgba(255,255,255,0.22)"
+        strokeWidth="0.6"
+      />
+      {/* iris */}
+      <circle cx={cx} cy={cy} r={irisR} fill={cfg.iris} />
+      {/* pupil/shape */}
+      {cfg.shape === 'round' && (
+        <circle cx={cx} cy={cy} r={pupilCircle} fill={cfg.pupil} />
+      )}
+      {cfg.shape === 'slit' && (
+        <ellipse cx={cx} cy={cy} rx={h * 0.05} ry={h * 0.26} fill={cfg.pupil} />
+      )}
+      {cfg.shape === 'thin' && (
+        <ellipse cx={cx} cy={cy} rx={h * 0.03} ry={h * 0.30} fill={cfg.pupil} />
+      )}
+      {cfg.shape === 'glow' && (
+        <>
+          <circle cx={cx} cy={cy} r={irisR * 1.1} fill={`url(#g-${type}-${on ? 'on' : 'off'})`} />
+          <circle cx={cx} cy={cy} r={h * 0.08} fill={cfg.pupil}
+                  style={{ filter: `drop-shadow(0 0 4px ${cfg.glow})` }} />
+        </>
+      )}
+      {/* tiny highlight */}
+      <circle cx={cx - irisR * 0.4} cy={cy - irisR * 0.4} r={h * 0.04} fill="rgba(255,255,255,0.85)" />
+    </svg>
+  );
+}
+
+// ── In-phone eye-type picker — collapses to a single chip, expands to a row ──
+function EyeSelector({ value, onChange, accent }) {
+  const [open, setOpen] = useState(false);
+  const current = EYE_TYPES.find(e => e.id === value) || EYE_TYPES[0];
+  return (
+    <div style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6,
+      padding: 4, borderRadius: 999,
+      background: 'rgba(15,18,26,0.62)',
+      backdropFilter: 'blur(16px) saturate(150%)',
+      WebkitBackdropFilter: 'blur(16px) saturate(150%)',
+      border: '0.5px solid rgba(255,255,255,0.10)',
+      boxShadow: '0 10px 28px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.05)',
+      fontFamily: 'var(--font-mono)',
+      WebkitTapHighlightColor: 'transparent',
+    }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 8,
+          padding: '5px 11px 5px 7px', borderRadius: 999,
+          background: open ? 'rgba(255,255,255,0.06)' : 'transparent',
+          border: 'none', cursor: 'pointer', color: 'rgba(235,240,250,0.9)',
+        }}>
+        <span style={{
+          display: 'inline-flex', width: 22, height: 22,
+          alignItems: 'center', justifyContent: 'center',
+        }}>
+          <EyeIcon type={value} size={22} on={true} />
+        </span>
+        <span style={{ fontSize: 10, letterSpacing: '0.18em', textTransform: 'uppercase', opacity: 0.85 }}>
+          {current.label}
+        </span>
+        <svg width="9" height="9" viewBox="0 0 10 10" style={{ opacity: 0.55, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 180ms' }}>
+          <path d="M2 4 L5 7 L8 4" stroke="currentColor" strokeWidth="1.2" fill="none" />
+        </svg>
+      </button>
+      {open && (
+        <div style={{
+          display: 'flex', gap: 4, paddingRight: 4,
+          borderLeft: '0.5px solid rgba(255,255,255,0.08)',
+          paddingLeft: 6, marginLeft: 2,
+        }}>
+          {EYE_TYPES.map(et => {
+            const active = et.id === value;
+            return (
+              <button
+                key={et.id}
+                onClick={() => { onChange(et.id); }}
+                title={et.label}
+                style={{
+                  width: 30, height: 30, borderRadius: 999,
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  background: active ? `${accent}26` : 'transparent',
+                  border: active ? `1px solid ${accent}` : '1px solid rgba(255,255,255,0.07)',
+                  boxShadow: active ? `0 0 14px ${accent}66` : 'none',
+                  cursor: 'pointer', padding: 0,
+                  transition: 'all 160ms ease',
+                  WebkitTapHighlightColor: 'transparent',
+                }}>
+                <EyeIcon type={et.id} size={22} on={active} />
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Front-camera preview thumbnail (only visible in Face mode) ──
+function CameraPreview({ videoRef, status, present, accent, onRetry }) {
+  const running = status === 'running';
+  const granting = status === 'granting';
+  const idle = status === 'idle';
+  const blocking = status === 'unsupported' || status === 'denied' || status === 'error';
+  const dot = running && present ? '#3CE08E' : running ? '#FFD25A' : '#FF5470';
+  const label = granting ? 'GRANTING…'
+    : running && present ? 'TRACKING'
+    : running ? 'SEARCHING'
+    : status === 'denied' ? 'DENIED'
+    : status === 'unsupported' ? 'NO FD'
+    : status === 'error' ? 'ERROR'
+    : 'IDLE';
+  return (
+    <div style={{
+      width: 96, padding: 4, borderRadius: 14,
+      background: 'rgba(10,12,18,0.72)',
+      border: `0.5px solid ${running ? accent + '55' : 'rgba(255,255,255,0.10)'}`,
+      backdropFilter: 'blur(14px) saturate(150%)',
+      WebkitBackdropFilter: 'blur(14px) saturate(150%)',
+      boxShadow: running
+        ? `0 10px 26px rgba(0,0,0,0.55), 0 0 18px ${accent}33, inset 0 1px 0 rgba(255,255,255,0.05)`
+        : '0 10px 26px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.05)',
+      fontFamily: 'var(--font-mono)',
+      color: 'rgba(235,240,250,0.9)',
+    }}>
+      <div style={{
+        position: 'relative', width: '100%', aspectRatio: '4/3',
+        borderRadius: 10, overflow: 'hidden',
+        background: '#04060c',
+      }}>
+        <video
+          ref={videoRef}
+          muted
+          playsInline
+          style={{
+            width: '100%', height: '100%', objectFit: 'cover',
+            transform: 'scaleX(-1)',
+            opacity: running ? 1 : 0.2,
+            display: 'block',
+          }}
+        />
+        {/* corner brackets so it reads as a viewfinder */}
+        {['tl', 'tr', 'bl', 'br'].map(c => (
+          <span key={c} style={{
+            position: 'absolute',
+            top:    c.startsWith('t') ? 4 : 'auto',
+            bottom: c.startsWith('b') ? 4 : 'auto',
+            left:   c.endsWith('l')   ? 4 : 'auto',
+            right:  c.endsWith('r')   ? 4 : 'auto',
+            width: 8, height: 8,
+            borderTop:    c.startsWith('t') ? `1px solid ${accent}` : 'none',
+            borderBottom: c.startsWith('b') ? `1px solid ${accent}` : 'none',
+            borderLeft:   c.endsWith('l')   ? `1px solid ${accent}` : 'none',
+            borderRight:  c.endsWith('r')   ? `1px solid ${accent}` : 'none',
+            opacity: running ? 0.7 : 0.25,
+          }} />
+        ))}
+        {blocking && (
+          <div style={{
+            position: 'absolute', inset: 0, display: 'flex',
+            alignItems: 'center', justifyContent: 'center', textAlign: 'center',
+            padding: 6, fontSize: 8, letterSpacing: '0.15em',
+            color: 'rgba(255,140,140,0.95)',
+          }}>
+            {status === 'unsupported' ? 'FaceDetector\nno disponible' : 'Sin acceso\na cámara'}
+          </div>
+        )}
+      </div>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '4px 4px 1px',
+      }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <span style={{
+            width: 6, height: 6, borderRadius: 999, background: dot,
+            boxShadow: `0 0 6px ${dot}`,
+          }} />
+          <span style={{ fontSize: 8, letterSpacing: '0.16em', opacity: 0.85 }}>{label}</span>
+        </span>
+        {blocking && onRetry && (
+          <button onClick={onRetry} style={{
+            background: 'transparent', border: 'none', cursor: 'pointer',
+            color: accent, fontSize: 8, letterSpacing: '0.16em', padding: 0,
+            fontFamily: 'var(--font-mono)',
+          }}>RETRY</button>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -365,8 +589,19 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "bloomBase": 0.5,
   "autoSwayStrength": 0.6,
   "backgroundStyle": "void",
-  "zoom": 1.0
+  "zoom": 1.0,
+  "eyeType": "devil"
 }/*EDITMODE-END*/;
+
+// ── Eye types ─────────────────────────────────────────────────
+const EYE_TYPES = [
+  { id: 'normal',    label: 'Normal' },
+  { id: 'cat',       label: 'Gato' },
+  { id: 'devil',     label: 'Diablo' },
+  { id: 'lizard',    label: 'Lagarto' },
+  { id: 'term-red',  label: 'T-Red' },
+  { id: 'term-blue', label: 'T-Blue' },
+];
 
 // ── Main app ──────────────────────────────────────────────────
 function App() {
@@ -389,6 +624,19 @@ function App() {
 
   // Touch drag state
   const touchState = useRef({ active: false, rx: 0, ry: 0, lx: 0, ly: 0 });
+
+  // ── Face-tracking refs ──────────────────────────────────────
+  // Front-camera + native FaceDetector. Face position drives the eyes
+  // immediately and the head with a slower spring, so the eyes lead
+  // and the cranium follows — like a person tracking with their gaze.
+  const faceVideoRef = useRef(null);
+  const faceStreamRef = useRef(null);
+  const faceDetectorRef = useRef(null);
+  const faceTargetRef = useRef({ x: 0, y: 0, present: false, lastSeen: 0 });
+  const faceHeadRef = useRef({ x: 0, y: 0 }); // low-pass for head turn
+  const [faceStatus, setFaceStatus] = useState('idle'); // idle | granting | running | unsupported | error | denied
+  const [faceError, setFaceError] = useState(null);
+  const [faceVisible, setFaceVisible] = useState(false);
 
   // ── BLE (Web Bluetooth) ──
   const [bleState, setBleState] = useState('sim'); // sim | scanning | connecting | connected | error
@@ -484,6 +732,7 @@ function App() {
       eng.setParticleMultiplier(t.particleAmount);
       eng.setBloomStrength(t.bloomBase);
       eng.setZoom?.(t.zoom);
+      eng.setEyeType?.(t.eyeType || 'normal');
     };
     if (window.SkullEngine) start();
     else window.addEventListener('skull-engine-ready', start, { once: true });
@@ -513,6 +762,28 @@ function App() {
     const eng = engineRef.current; if (!eng) return;
     eng.setZoom?.(t.zoom);
   }, [t.zoom]);
+  useEffect(() => {
+    const eng = engineRef.current; if (!eng) return;
+    eng.setEyeType?.(t.eyeType || 'normal');
+  }, [t.eyeType]);
+
+  // ── Eyes follow the cursor / touch position ──
+  // Normalised to the SCREEN element so finger drags inside the phone
+  // map cleanly to a -1..1 vector centred on the skull.
+  const screenRef = useRef(null);
+  useEffect(() => {
+    const onMove = (e) => {
+      const el = screenRef.current;
+      const rect = el ? el.getBoundingClientRect() : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const nx = (e.clientX - cx) / (rect.width / 2);
+      const ny = (e.clientY - cy) / (rect.height / 2);
+      engineRef.current?.setEyeTarget?.(nx, ny);
+    };
+    window.addEventListener('pointermove', onMove, { passive: true });
+    return () => window.removeEventListener('pointermove', onMove);
+  }, []);
 
   // ── Motion source: drive engine.setRotation each frame ──
   useEffect(() => {
@@ -551,6 +822,30 @@ function App() {
           }
         } else if (motionModeRef.current === 'gyro') {
           eng.setRotation(gyroX * amp, gyroY * amp, gyroZ * amp);
+        } else if (motionModeRef.current === 'face') {
+          // Eyes lead, head follows.
+          const f = faceTargetRef.current;
+          const now = performance.now();
+          const fresh = f.present && (now - f.lastSeen) < 1500;
+          if (fresh) {
+            // Eyes update immediately via setEyeTarget (snappy spring inside engine).
+            eng.setEyeTarget(f.x * 1.25, f.y * 1.0);
+            // Head turn: low-pass the face target so the head lags ~600ms behind.
+            const lag = 1 - Math.pow(0.05, dt); // ~600ms time constant
+            faceHeadRef.current.x += (f.x - faceHeadRef.current.x) * lag;
+            faceHeadRef.current.y += (f.y - faceHeadRef.current.y) * lag;
+            eng.setRotation(
+              faceHeadRef.current.x * 0.60 * amp,
+              faceHeadRef.current.y * 0.30 * amp,
+              0
+            );
+          } else {
+            // No face — relax head back toward center and let eyes idle.
+            const relax = 1 - Math.pow(0.2, dt);
+            faceHeadRef.current.x += (0 - faceHeadRef.current.x) * relax;
+            faceHeadRef.current.y += (0 - faceHeadRef.current.y) * relax;
+            eng.setRotation(faceHeadRef.current.x * 0.60, faceHeadRef.current.y * 0.30, 0);
+          }
         } else {
           // touch drag — apply gentle return-to-center spring when not active
           const tt = touchState.current;
@@ -579,6 +874,120 @@ function App() {
       window.removeEventListener('deviceorientation', onOrient);
     };
   }, [motionMode]);
+
+  // ── Face-tracking camera lifecycle ──────────────────────────
+  // Activates only when motionMode === 'face'. Spins up the front
+  // camera, runs native FaceDetector at ~12Hz, and writes the
+  // detected face centre into faceTargetRef. Tears everything down
+  // (and stops the camera light) when the user leaves face mode.
+  useEffect(() => {
+    if (motionMode !== 'face') {
+      // Tear down any prior session
+      if (faceStreamRef.current) {
+        try { faceStreamRef.current.getTracks().forEach(tr => tr.stop()); } catch {}
+        faceStreamRef.current = null;
+      }
+      if (faceVideoRef.current) {
+        try { faceVideoRef.current.pause(); } catch {}
+        faceVideoRef.current.srcObject = null;
+      }
+      setFaceStatus('idle');
+      setFaceVisible(false);
+      faceTargetRef.current = { x: 0, y: 0, present: false, lastSeen: 0 };
+      return;
+    }
+
+    let cancelled = false;
+    let detectTimer = null;
+    setFaceVisible(true);
+
+    (async () => {
+      if (!('FaceDetector' in window)) {
+        setFaceStatus('unsupported');
+        return;
+      }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setFaceStatus('unsupported');
+        return;
+      }
+      try {
+        setFaceStatus('granting');
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: { ideal: 320 }, height: { ideal: 240 } },
+          audio: false,
+        });
+        if (cancelled) { stream.getTracks().forEach(tr => tr.stop()); return; }
+        faceStreamRef.current = stream;
+        const video = faceVideoRef.current;
+        if (!video) { stream.getTracks().forEach(tr => tr.stop()); return; }
+        video.srcObject = stream;
+        video.muted = true;
+        video.playsInline = true;
+        await video.play().catch(() => {});
+
+        try {
+          faceDetectorRef.current = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
+        } catch (e) {
+          setFaceStatus('unsupported');
+          setFaceError(e.message || String(e));
+          return;
+        }
+        setFaceStatus('running');
+
+        const tick = async () => {
+          if (cancelled) return;
+          try {
+            const v = faceVideoRef.current;
+            if (v && v.readyState >= 2 && v.videoWidth > 0) {
+              const faces = await faceDetectorRef.current.detect(v);
+              if (faces.length > 0) {
+                const f = faces[0].boundingBox;
+                const cx = f.x + f.width / 2;
+                const cy = f.y + f.height / 2;
+                const w = v.videoWidth, h = v.videoHeight;
+                const rawX = (cx / w) * 2 - 1;
+                const rawY = (cy / h) * 2 - 1;
+                // Front camera preview is mirrored; flip X so left↔right match.
+                faceTargetRef.current = {
+                  x: -rawX,
+                  y: rawY,
+                  present: true,
+                  lastSeen: performance.now(),
+                };
+              }
+            }
+          } catch (e) {
+            // Ignore transient detection errors; keep ticking.
+          }
+          if (!cancelled) detectTimer = setTimeout(tick, 80);
+        };
+        tick();
+      } catch (err) {
+        console.warn('Face mode: camera failed', err);
+        setFaceError(err?.message || String(err));
+        setFaceStatus(err?.name === 'NotAllowedError' ? 'denied' : 'error');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      clearTimeout(detectTimer);
+      if (faceStreamRef.current) {
+        try { faceStreamRef.current.getTracks().forEach(tr => tr.stop()); } catch {}
+        faceStreamRef.current = null;
+      }
+      if (faceVideoRef.current) {
+        try { faceVideoRef.current.pause(); } catch {}
+        faceVideoRef.current.srcObject = null;
+      }
+    };
+  }, [motionMode]);
+
+  const retryFace = useCallback(() => {
+    // Bounce the mode to retrigger the effect
+    setMotionMode('sim');
+    setTimeout(() => setMotionMode('face'), 50);
+  }, []);
 
   // ── Touch drag + pinch-to-zoom on the canvas ──
   // Tracks active pointers in a map. 1 pointer + 'touch' mode → rotate.
@@ -682,7 +1091,7 @@ function App() {
   const accentGlow = telem.intensity > 0.25;
 
   const screen = (
-        <div style={{
+        <div ref={screenRef} style={{
           position: 'absolute', inset: 0, background: bg, overflow: 'hidden',
         }}>
             {/* 3D canvas */}
@@ -754,6 +1163,33 @@ function App() {
             }}>
               · {palette.label} ·
             </div>
+
+            {/* Eye-type picker (in-phone) */}
+            <div style={{
+              position: 'absolute', top: RAW_MODE ? 132 : 186, left: 0, right: 0,
+              display: 'flex', justifyContent: 'center', zIndex: 13,
+            }}>
+              <EyeSelector
+                value={t.eyeType || 'normal'}
+                onChange={(v) => setTweak('eyeType', v)}
+                accent={palette.dot}
+              />
+            </div>
+
+            {/* Front-camera preview (face-tracking mode) */}
+            {faceVisible && (
+              <div style={{
+                position: 'absolute', top: RAW_MODE ? 60 : 108, right: 14, zIndex: 13,
+              }}>
+                <CameraPreview
+                  videoRef={faceVideoRef}
+                  status={faceStatus}
+                  present={faceTargetRef.current?.present && (performance.now() - (faceTargetRef.current?.lastSeen || 0) < 1500)}
+                  accent={palette.dot}
+                  onRetry={retryFace}
+                />
+              </div>
+            )}
 
             {/* HUD */}
             <HUD
@@ -848,6 +1284,12 @@ function App() {
         <TweakSlider label="Sway power" value={t.autoSwayStrength} min={0.0} max={1.5} step={0.05}
                      onChange={v => setTweak('autoSwayStrength', v)} />
         <TweakSection label="Stage" />
+        <TweakSelect
+          label="Eyes"
+          value={t.eyeType || 'normal'}
+          options={EYE_TYPES.map(e => ({ value: e.id, label: e.label }))}
+          onChange={v => setTweak('eyeType', v)}
+        />
         <TweakRadio
           label="Background"
           value={t.backgroundStyle}
