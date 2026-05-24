@@ -124,6 +124,9 @@ class SkullEngine {
     // ── Glow halo plane behind the skull ──
     this._setupHalo();
 
+    // ── Eyeballs (live inside the skull's eye sockets) ──
+    this._setupEyes();
+
     // ── Post processing ──
     // Explicit RGBA-byte render target so the composer doesn't auto-pick HalfFloat
     // (some browsers / GL drivers won't render to the half-float target correctly here).
@@ -305,6 +308,202 @@ class SkullEngine {
     this.scene.add(halo);
     this.halo = halo;
     this.haloMat = haloMat;
+  }
+
+  _setupEyes() {
+    // Two eyeballs parented to skullGroup so they rotate WITH the skull.
+    // The sphere itself rotates independently to "look" — that gives the
+    // pupils a small angular offset from the eye centre while the cranium
+    // continues its own motion.
+    this.eyes = [];
+    this.eyeTarget = { x: 0, y: 0 };
+    this.eyeType = 'normal';
+    this._lastEyeInput = 0;
+
+    const eyePositions = [
+      new THREE.Vector3(-0.315, 0.445, 0.755), // left socket
+      new THREE.Vector3( 0.315, 0.445, 0.755), // right socket
+    ];
+    const radius = 0.20;
+    const eyeScale = 0.81;
+    const geo = new THREE.SphereGeometry(radius, 48, 32);
+
+    const vertexShader = `
+      varying vec3 vLocalPos;
+      varying vec3 vNormal;
+      void main(){
+        vLocalPos = position;
+        vNormal = normalize(normalMatrix * normal);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `;
+    const fragmentShader = `
+      precision highp float;
+      varying vec3 vLocalPos;
+      varying vec3 vNormal;
+      uniform float uType;
+      uniform float uTime;
+      uniform vec3 uIrisColor;
+      uniform vec3 uScleraColor;
+      uniform vec3 uGlowColor;
+      uniform float uGlow;
+
+      float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+
+      void main(){
+        vec3 lp = normalize(vLocalPos);
+        vec3 n  = normalize(vNormal);
+
+        // Sclera base with faint veining everywhere.
+        vec3 sclera = uScleraColor;
+        float vein = sin(lp.x * 28.0 + lp.y * 11.0) * sin(lp.y * 18.0) * 0.5 + 0.5;
+        sclera = mix(sclera, sclera * vec3(1.0, 0.78, 0.78), pow(vein, 3.0) * 0.18);
+
+        vec3 col = sclera;
+
+        // Iris/pupil only on the front-facing cap.
+        if (lp.z > 0.25) {
+          vec2 c = vec2(lp.x, lp.y);
+          float r = length(c);
+
+          float irisR = 0.58;
+          float irisEdge = smoothstep(irisR + 0.04, irisR - 0.02, r);
+
+          float ang = atan(c.y, c.x);
+          float fibres = sin(ang * 64.0 + r * 18.0) * 0.5 + 0.5;
+          float speckle = hash(floor(vec2(ang * 22.0, r * 28.0)));
+          vec3 iris = uIrisColor * (0.55 + fibres * 0.35 + speckle * 0.15);
+          iris *= 1.0 - smoothstep(irisR - 0.08, irisR, r) * 0.55;
+          iris *= 1.0 + (1.0 - smoothstep(0.0, irisR * 0.5, r)) * 0.15;
+
+          col = mix(col, iris, irisEdge);
+
+          // Pupil shape:
+          //   0 normal · round
+          //   1 cat    · slit (medium)
+          //   2 devil  · slit + halo
+          //   3 lizard · razor-thin slit
+          //   4 terminator · tiny bright glowing pupil
+          float pd = 100.0;
+          if (uType < 0.5) {
+            pd = r / 0.20;
+          } else if (uType < 1.5) {
+            pd = length(vec2(c.x / 0.070, c.y / 0.36));
+          } else if (uType < 2.5) {
+            pd = length(vec2(c.x / 0.055, c.y / 0.42));
+          } else if (uType < 3.5) {
+            pd = length(vec2(c.x / 0.040, c.y / 0.46));
+          } else {
+            pd = r / 0.095;
+          }
+
+          float pupilSoft = smoothstep(1.05, 0.92, pd);
+
+          if (uType >= 3.5) {
+            float bloom = exp(-pd * 0.9) * 1.4;
+            col += uGlowColor * bloom * 0.9;
+            float pcore = smoothstep(1.0, 0.0, pd);
+            vec3 pupil = uGlowColor * (1.8 + pcore * 5.5);
+            col = mix(col, pupil, pupilSoft);
+          } else {
+            col = mix(col, vec3(0.012, 0.010, 0.014), pupilSoft);
+          }
+
+          // Devil halo bleeding past the iris.
+          if (uType > 1.5 && uType < 2.5) {
+            float halo = exp(-r * 2.4) * uGlow;
+            col += uGlowColor * halo * 0.7;
+          }
+
+          // Specular highlight (upper-left).
+          vec2 hl = c - vec2(-0.20, 0.22);
+          float h = exp(-dot(hl, hl) * 220.0) * 1.6;
+          col += vec3(h);
+          vec2 hl2 = c - vec2(0.12, -0.14);
+          float h2 = exp(-dot(hl2, hl2) * 600.0) * 0.6;
+          col += vec3(h2);
+        }
+
+        float l = max(0.0, dot(n, normalize(vec3(0.35, 0.55, 0.95))));
+        float rim = pow(1.0 - max(0.0, dot(n, vec3(0.0, 0.0, 1.0))), 2.0);
+        col *= 0.35 + l * 0.85;
+        col += rim * 0.08;
+
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `;
+
+    for (let i = 0; i < 2; i++) {
+      const mat = new THREE.ShaderMaterial({
+        uniforms: {
+          uType:        { value: 0 },
+          uIrisColor:   { value: new THREE.Color(0x3f7ac8) },
+          uScleraColor: { value: new THREE.Color(0xeae0cf) },
+          uGlowColor:   { value: new THREE.Color(0xff2020) },
+          uGlow:        { value: 0.0 },
+          uTime:        { value: 0 },
+        },
+        vertexShader,
+        fragmentShader,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.copy(eyePositions[i]);
+      mesh.scale.setScalar(eyeScale);
+      mesh.renderOrder = 2;
+      this.skullGroup.add(mesh);
+      this.eyes.push({
+        mesh, mat,
+        curRX: 0, curRY: 0,
+        idleSeed: i * 1.7,
+      });
+    }
+
+    this._applyEyeType('normal');
+  }
+
+  _applyEyeType(type) {
+    const map = {
+      'normal':    { t: 0, iris: 0x3f7ac8, sclera: 0xeae0cf, glowC: 0x000000, glow: 0.0 },
+      'cat':       { t: 1, iris: 0xd9b13a, sclera: 0xfff3d2, glowC: 0x000000, glow: 0.0 },
+      'devil':     { t: 2, iris: 0xa00000, sclera: 0x1e0404, glowC: 0xff2828, glow: 1.0 },
+      'lizard':    { t: 3, iris: 0x6cc26c, sclera: 0xe6e8b8, glowC: 0x000000, glow: 0.0 },
+      'term-red':  { t: 4, iris: 0x200202, sclera: 0x0a0303, glowC: 0xff1818, glow: 1.0 },
+      'term-blue': { t: 4, iris: 0x020216, sclera: 0x03060c, glowC: 0x4ec0ff, glow: 1.0 },
+    };
+    const cfg = map[type] || map.normal;
+    if (!this.eyes) return;
+    for (const e of this.eyes) {
+      e.mat.uniforms.uType.value = cfg.t;
+      e.mat.uniforms.uIrisColor.value.setHex(cfg.iris);
+      e.mat.uniforms.uScleraColor.value.setHex(cfg.sclera);
+      e.mat.uniforms.uGlowColor.value.setHex(cfg.glowC);
+      e.mat.uniforms.uGlow.value = cfg.glow;
+    }
+    this.eyeType = type;
+  }
+
+  setEyeType(type) { this._applyEyeType(type); }
+  setEyeTarget(nx, ny) {
+    this.eyeTarget.x = Math.max(-1.4, Math.min(1.4, nx));
+    this.eyeTarget.y = Math.max(-1.4, Math.min(1.4, ny));
+    this._lastEyeInput = performance.now();
+  }
+
+  // Live calibration: separation = |x|, posY/posZ = vertical/depth, scale = radius.
+  setEyeLayout({ sep, posY, posZ, scale } = {}) {
+    if (!this.eyes) return;
+    if (sep   != null) this._eyeSep   = sep;
+    if (posY  != null) this._eyePosY  = posY;
+    if (posZ  != null) this._eyePosZ  = posZ;
+    if (scale != null) this._eyeScale = scale;
+    const sx = this._eyeSep   ?? 0.42;
+    const sy = this._eyePosY  ?? 0.32;
+    const sz = this._eyePosZ  ?? 0.78;
+    const sc = this._eyeScale ?? 1.0;
+    this.eyes[0].mesh.position.set(-sx, sy, sz);
+    this.eyes[1].mesh.position.set( sx, sy, sz);
+    this.eyes[0].mesh.scale.setScalar(sc);
+    this.eyes[1].mesh.scale.setScalar(sc);
   }
 
   _setupEmissionPoints() {
@@ -533,6 +732,32 @@ class SkullEngine {
       // slight breathing scale on intensity
       const s = 1 + Math.sin(t * 1.4) * 0.005 + this.smoothedIntensity * 0.03;
       this.skullGroup.scale.setScalar(s);
+    }
+
+    // Eyes — look around within the socket. Each eye smoothly tracks the
+    // last cursor/touch target; when no input has come in for ~1.5s the
+    // eyes drift on a small idle pattern so they're never frozen.
+    if (this.eyes && this.eyes.length) {
+      const now = performance.now();
+      const idleAmt = Math.min(1, Math.max(0, (now - (this._lastEyeInput || 0)) - 1500) / 1200);
+      const tx = this.eyeTarget.x;
+      const ty = this.eyeTarget.y;
+      const maxAng = 0.34;
+      const eyeK = 1 - Math.pow(0.0005, dt); // ~snappy but smooth
+      for (const e of this.eyes) {
+        const idleX = Math.sin(t * 0.55 + e.idleSeed) * 0.45
+                    + Math.sin(t * 1.7 + e.idleSeed * 2.1) * 0.18;
+        const idleY = Math.cos(t * 0.7 + e.idleSeed * 1.3) * 0.30;
+        const blendX = tx * (1 - idleAmt) + idleX * idleAmt;
+        const blendY = ty * (1 - idleAmt) + idleY * idleAmt;
+        const targetRY =  blendX * maxAng;
+        const targetRX = -blendY * maxAng;
+        e.curRX += (targetRX - e.curRX) * eyeK;
+        e.curRY += (targetRY - e.curRY) * eyeK;
+        e.mesh.rotation.x = e.curRX;
+        e.mesh.rotation.y = e.curRY;
+        e.mat.uniforms.uTime.value = t;
+      }
     }
 
     // Particles
