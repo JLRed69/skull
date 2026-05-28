@@ -401,15 +401,88 @@ function GearIcon({ size = 18, color = 'rgba(240,245,255,0.85)' }) {
   );
 }
 
+// ── Compact eye-type picker for inside the HUD ────────────────
+// Shows the current eye as a small pill; tapping opens a popover
+// grid ABOVE the button so it never widens the HUD row.
+function EyeSelectorCompact({ value, onChange, accent }) {
+  const [open, setOpen] = useState(false);
+  const current = EYE_TYPES.find(e => e.id === value) || EYE_TYPES[0];
+  return (
+    <div style={{ position: 'relative', display: 'inline-flex' }}>
+      {open && (
+        <>
+          <div
+            onClick={() => setOpen(false)}
+            style={{ position: 'fixed', inset: 0, zIndex: 18 }}
+          />
+          <div style={{
+            position: 'absolute', bottom: '100%', right: 0, marginBottom: 8,
+            display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5,
+            padding: 7, borderRadius: 14, zIndex: 19,
+            background: 'rgba(14,17,24,0.92)',
+            backdropFilter: 'blur(18px) saturate(160%)',
+            WebkitBackdropFilter: 'blur(18px) saturate(160%)',
+            border: '0.5px solid rgba(255,255,255,0.12)',
+            boxShadow: '0 18px 44px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.06)',
+          }}>
+            {EYE_TYPES.map(et => {
+              const active = et.id === value;
+              return (
+                <button
+                  key={et.id}
+                  onClick={() => { onChange(et.id); setOpen(false); }}
+                  title={et.label}
+                  style={{
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
+                    width: 44, padding: '6px 2px', borderRadius: 10,
+                    background: active ? `${accent}22` : 'transparent',
+                    border: active ? `1px solid ${accent}` : '1px solid rgba(255,255,255,0.07)',
+                    boxShadow: active ? `0 0 12px ${accent}55` : 'none',
+                    cursor: 'pointer', transition: 'all 150ms ease',
+                    fontFamily: 'var(--font-mono)',
+                  }}>
+                  <EyeIcon type={et.id} size={22} on={active} />
+                  <span style={{
+                    fontSize: 7.5, letterSpacing: '0.08em', textTransform: 'uppercase',
+                    color: active ? '#fff' : 'rgba(235,240,250,0.6)',
+                  }}>{et.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6,
+          padding: '5px 8px 5px 6px', borderRadius: 999,
+          background: open ? `${accent}22` : 'rgba(255,255,255,0.05)',
+          border: `0.5px solid ${open ? accent : 'rgba(255,255,255,0.12)'}`,
+          cursor: 'pointer', color: 'rgba(235,240,250,0.92)',
+          fontFamily: 'var(--font-mono)', WebkitTapHighlightColor: 'transparent',
+        }}>
+        <EyeIcon type={value} size={18} on={true} />
+        <span style={{ fontSize: 8.5, letterSpacing: '0.12em', textTransform: 'uppercase', opacity: 0.85 }}>
+          {current.label}
+        </span>
+        <svg width="8" height="8" viewBox="0 0 10 10" style={{ opacity: 0.5, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 160ms' }}>
+          <path d="M2 6 L5 3 L8 6" stroke="currentColor" strokeWidth="1.3" fill="none" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
 // ── Telemetry HUD ─────────────────────────────────────────────
-function HUD({ telem, motionMode, paletteDot, onModeChange, onAmplifyDown, onAmplifyUp, amplifying }) {
+function HUD({ telem, motionMode, paletteDot, onModeChange, onAmplifyDown, onAmplifyUp, amplifying, eyeType, onEyeTypeChange }) {
   const intensity = telem?.intensity ?? 0;
   const rot = telem?.rotation ?? { x: 0, y: 0, z: 0 };
   return (
     <div style={{
       position: 'absolute', left: 14, right: 14, bottom: RAW_MODE ? 18 : 44,
-      borderRadius: 22, overflow: 'hidden',
-      background: 'rgba(10,12,18,0.62)',
+      borderRadius: 20, overflow: 'visible',
+      background: 'rgba(10,12,18,0.6)',
       backdropFilter: 'blur(22px) saturate(160%)',
       WebkitBackdropFilter: 'blur(22px) saturate(160%)',
       border: '0.5px solid rgba(255,255,255,0.08)',
@@ -417,89 +490,62 @@ function HUD({ telem, motionMode, paletteDot, onModeChange, onAmplifyDown, onAmp
       color: 'rgba(235,240,250,0.94)',
       fontFamily: 'var(--font-mono)',
     }}>
-      {/* Header strip */}
+      {/* Row 1: compact axis readouts (left) + eye picker (right) */}
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '11px 14px 9px',
-        borderBottom: '0.5px solid rgba(255,255,255,0.06)',
+        gap: 10, padding: '9px 12px 7px',
       }}>
-        <span style={{ fontSize: 9, letterSpacing: '0.24em', opacity: 0.55 }}>
-          MPU6050 · TELEMETRY
-        </span>
-        <span style={{ fontSize: 9, letterSpacing: '0.18em', opacity: 0.55 }}>
-          100 Hz
-        </span>
-      </div>
-
-      {/* Axis readout grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', padding: '14px 14px 12px', gap: 10 }}>
-        {[['X', rot.x, '#FF6B6B'], ['Y', rot.y, '#7FDBFF'], ['Z', rot.z, '#B89BFF']].map(([axis, val, col]) => (
-          <div key={axis} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontSize: 9, letterSpacing: '0.2em', opacity: 0.5 }}>{axis}-AXIS</span>
-            <span style={{ fontSize: 22, fontWeight: 300, letterSpacing: '-0.01em' }}>
-              <Digit v={val} />
-            </span>
-            <div style={{ position: 'relative', height: 2, background: 'rgba(255,255,255,0.07)', borderRadius: 2 }}>
-              <div style={{
-                position: 'absolute', left: '50%', top: 0, bottom: 0,
-                width: Math.min(48, Math.abs(val) * 32) + '%',
-                transform: val < 0 ? 'translateX(-100%)' : 'none',
-                background: col, borderRadius: 2, boxShadow: `0 0 6px ${col}`,
-                transition: 'width 80ms linear',
-              }} />
-              <div style={{ position: 'absolute', left: '50%', top: -2, bottom: -2, width: 1, background: 'rgba(255,255,255,0.18)' }} />
+        <div style={{ display: 'flex', gap: 14 }}>
+          {[['X', rot.x, '#FF6B6B'], ['Y', rot.y, '#7FDBFF'], ['Z', rot.z, '#B89BFF']].map(([axis, val, col]) => (
+            <div key={axis} style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 46 }}>
+              <span style={{ fontSize: 7.5, letterSpacing: '0.16em', opacity: 0.45 }}>{axis}</span>
+              <span style={{ fontSize: 15, fontWeight: 300, letterSpacing: '-0.01em', lineHeight: 1.05, color: col }}>
+                <Digit v={val} />
+              </span>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
+        <EyeSelectorCompact value={eyeType} onChange={onEyeTypeChange} accent={paletteDot} />
       </div>
 
-      {/* Intensity bar */}
-      <div style={{ padding: '4px 14px 12px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
-          <span style={{ fontSize: 9, letterSpacing: '0.22em', opacity: 0.55 }}>INTENSITY</span>
-          <span style={{ fontSize: 11, letterSpacing: '0.04em', fontVariantNumeric: 'tabular-nums', opacity: 0.85 }}>
-            {(intensity * 100).toFixed(0).padStart(3, '0')}%
-          </span>
-        </div>
-        <div style={{ position: 'relative', height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden' }}>
+      {/* Row 2: intensity inline */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '0 12px 8px' }}>
+        <span style={{ fontSize: 7.5, letterSpacing: '0.18em', opacity: 0.5, whiteSpace: 'nowrap' }}>INT</span>
+        <div style={{ position: 'relative', flex: 1, height: 4, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden' }}>
           <div style={{
             position: 'absolute', left: 0, top: 0, bottom: 0,
             width: (intensity * 100) + '%',
             background: `linear-gradient(90deg, ${paletteDot}AA, ${paletteDot})`,
-            boxShadow: `0 0 12px ${paletteDot}`,
+            boxShadow: `0 0 10px ${paletteDot}`,
             transition: 'width 80ms linear',
           }} />
-          {/* peak tick markers */}
-          {[0.25, 0.5, 0.75].map(p => (
-            <div key={p} style={{
-              position: 'absolute', left: `${p*100}%`, top: 0, bottom: 0, width: 1,
-              background: 'rgba(255,255,255,0.18)',
-            }} />
-          ))}
         </div>
+        <span style={{ fontSize: 9, fontVariantNumeric: 'tabular-nums', opacity: 0.8, whiteSpace: 'nowrap' }}>
+          {(intensity * 100).toFixed(0).padStart(3, '0')}%
+        </span>
       </div>
 
-      {/* Bottom row: mode segmented + amplify */}
+      {/* Row 3: mode segmented + amplify */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 8,
-        padding: '10px 12px 12px', borderTop: '0.5px solid rgba(255,255,255,0.06)',
+        display: 'flex', alignItems: 'center', gap: 7,
+        padding: '7px 10px 9px', borderTop: '0.5px solid rgba(255,255,255,0.06)',
       }}>
         <div style={{
           display: 'flex', flex: 1, background: 'rgba(255,255,255,0.04)',
-          borderRadius: 10, padding: 3, gap: 2,
+          borderRadius: 9, padding: 2, gap: 2,
           border: '0.5px solid rgba(255,255,255,0.05)',
         }}>
           {MOTION_MODES.map(m => {
             const active = m.id === motionMode;
             return (
               <button key={m.id} onClick={() => onModeChange(m.id)} style={{
-                flex: 1, padding: '6px 0', fontSize: 10, fontWeight: 500,
-                letterSpacing: '0.1em', textTransform: 'uppercase',
+                flex: 1, padding: '5px 0', fontSize: 8.5, fontWeight: 500,
+                letterSpacing: '0.06em', textTransform: 'uppercase',
                 color: active ? '#0b0e15' : 'rgba(235,240,250,0.7)',
                 background: active ? paletteDot : 'transparent',
-                border: 'none', borderRadius: 8, cursor: 'pointer',
+                border: 'none', borderRadius: 7, cursor: 'pointer',
                 fontFamily: 'var(--font-mono)',
-                boxShadow: active ? `0 0 16px ${paletteDot}55` : 'none',
+                boxShadow: active ? `0 0 14px ${paletteDot}55` : 'none',
                 transition: 'all 180ms ease',
               }}>
                 {m.label}
@@ -512,18 +558,18 @@ function HUD({ telem, motionMode, paletteDot, onModeChange, onAmplifyDown, onAmp
           onPointerUp={onAmplifyUp}
           onPointerLeave={onAmplifyUp}
           style={{
-            padding: '7px 14px', borderRadius: 10,
+            padding: '6px 12px', borderRadius: 9,
             background: amplifying ? paletteDot : 'rgba(255,255,255,0.05)',
             color: amplifying ? '#0b0e15' : 'rgba(235,240,250,0.9)',
             border: `0.5px solid ${amplifying ? paletteDot : 'rgba(255,255,255,0.12)'}`,
-            fontSize: 10, letterSpacing: '0.14em', textTransform: 'uppercase',
+            fontSize: 8.5, letterSpacing: '0.12em', textTransform: 'uppercase',
             fontFamily: 'var(--font-mono)', fontWeight: 600,
             cursor: 'pointer', transition: 'all 120ms ease',
-            boxShadow: amplifying ? `0 0 22px ${paletteDot}80` : 'none',
-            touchAction: 'none', userSelect: 'none',
+            boxShadow: amplifying ? `0 0 20px ${paletteDot}80` : 'none',
+            touchAction: 'none', userSelect: 'none', whiteSpace: 'nowrap',
           }}
         >
-          {amplifying ? '⌁ Amplify' : 'Amplify'}
+          {amplifying ? '⌁ Amp' : 'Amp'}
         </button>
       </div>
     </div>
@@ -589,7 +635,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "bloomBase": 0.5,
   "autoSwayStrength": 0.6,
   "backgroundStyle": "void",
-  "zoom": 1.0,
+  "zoom": 1.8,
   "eyeType": "devil"
 }/*EDITMODE-END*/;
 
@@ -646,10 +692,19 @@ function App() {
   const bleDeviceRef = useRef(null);
   const bleDataRef = useRef({ x: 0, y: 0, z: 0, intensity: 0 });
   const bleConnectedRef = useRef(false);
+  // Baseline captured at connect time: the head's current pose becomes the
+  // new zero, so motion is relative to wherever the device was sitting.
+  const bleBaseRef = useRef(null);
 
   const onBleNotify = useCallback((e) => {
     const parsed = parseTelemetry(e.target.value);
-    if (parsed) bleDataRef.current = parsed;
+    if (parsed) {
+      // First reading after (re)connect defines the zero.
+      if (!bleBaseRef.current) {
+        bleBaseRef.current = { x: parsed.x, y: parsed.y, z: parsed.z };
+      }
+      bleDataRef.current = parsed;
+    }
   }, []);
 
   const onBleDisconnect = useCallback(() => {
@@ -683,6 +738,7 @@ function App() {
       await telemChar.startNotifications();
       telemChar.addEventListener('characteristicvaluechanged', onBleNotify);
       bleCharRef.current = telemChar;
+      bleBaseRef.current = null; // recapture zero on this fresh connection
       bleConnectedRef.current = true;
       setBleState('connected');
     } catch (err) {
@@ -699,6 +755,7 @@ function App() {
     bleConnectedRef.current = false;
     bleCharRef.current = null;
     bleDeviceRef.current = null;
+    bleBaseRef.current = null;
     setBleDevice(null);
     setBleState('sim');
   }, []);
@@ -782,7 +839,11 @@ function App() {
       engineRef.current?.setEyeTarget?.(nx, ny);
     };
     window.addEventListener('pointermove', onMove, { passive: true });
-    return () => window.removeEventListener('pointermove', onMove);
+    window.addEventListener('pointerdown', onMove, { passive: true });
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerdown', onMove);
+    };
   }, []);
 
   // ── Motion source: drive engine.setRotation each frame ──
@@ -807,9 +868,12 @@ function App() {
         const amp = amplifyingRef.current ? 1.8 : 1.0;
         if (motionModeRef.current === 'sim') {
           if (bleConnectedRef.current) {
-            // Real telemetry from ESP32 — feed rotation directly.
+            // Real telemetry from ESP32 — fed RELATIVE to the pose captured
+            // when the link opened, so the skull starts centred regardless
+            // of how the device was oriented at connect time.
             const d = bleDataRef.current;
-            eng.setRotation(d.x * amp, d.y * amp, d.z * amp);
+            const b = bleBaseRef.current || { x: 0, y: 0, z: 0 };
+            eng.setRotation((d.x - b.x) * amp, (d.y - b.y) * amp, (d.z - b.z) * amp);
           } else {
             simT += dt;
             const s = swayStrengthRef.current * amp;
@@ -1164,18 +1228,6 @@ function App() {
               · {palette.label} ·
             </div>
 
-            {/* Eye-type picker (in-phone) */}
-            <div style={{
-              position: 'absolute', top: RAW_MODE ? 132 : 186, left: 0, right: 0,
-              display: 'flex', justifyContent: 'center', zIndex: 13,
-            }}>
-              <EyeSelector
-                value={t.eyeType || 'normal'}
-                onChange={(v) => setTweak('eyeType', v)}
-                accent={palette.dot}
-              />
-            </div>
-
             {/* Front-camera preview (face-tracking mode) */}
             {faceVisible && (
               <div style={{
@@ -1200,6 +1252,8 @@ function App() {
               onAmplifyDown={onAmplifyDown}
               onAmplifyUp={onAmplifyUp}
               amplifying={amplifying}
+              eyeType={t.eyeType || 'normal'}
+              onEyeTypeChange={(v) => setTweak('eyeType', v)}
             />
 
             {/* Boot overlay */}

@@ -737,25 +737,56 @@ class SkullEngine {
     // Eyes — look around within the socket. Each eye smoothly tracks the
     // last cursor/touch target; when no input has come in for ~1.5s the
     // eyes drift on a small idle pattern so they're never frozen.
+    // Eyes — both eyes move IDENTICALLY (locked together, never independent).
+    // Behaviour:
+    //  · Default: look straight ahead (centre).
+    //  · On touch/cursor input: both follow the finger for ~2s, then recentre.
+    //  · Otherwise, roughly once a minute, flick a brief random glance (as if
+    //    someone suddenly spoke nearby) and snap back to centre.
     if (this.eyes && this.eyes.length) {
       const now = performance.now();
-      const idleAmt = Math.min(1, Math.max(0, (now - (this._lastEyeInput || 0)) - 1500) / 1200);
-      const tx = this.eyeTarget.x;
-      const ty = this.eyeTarget.y;
       const maxAng = 0.34;
-      const eyeK = 1 - Math.pow(0.0005, dt); // ~snappy but smooth
+      const hasInput = (now - (this._lastEyeInput || 0)) < 1800;
+
+      // Shared target the BOTH eyes resolve to.
+      let gx = 0, gy = 0;
+
+      if (hasInput) {
+        // Follow finger / cursor.
+        gx = this.eyeTarget.x;
+        gy = this.eyeTarget.y;
+        // Cancel any pending glance while interacting.
+        this._glanceUntil = 0;
+        this._nextGlanceAt = now + 45000 + Math.random() * 30000;
+      } else {
+        // Schedule the first glance once if unset.
+        if (this._nextGlanceAt == null) {
+          this._nextGlanceAt = now + 45000 + Math.random() * 30000;
+        }
+        // Time to start a glance?
+        if (now >= this._nextGlanceAt && (this._glanceUntil || 0) < now) {
+          const ang = Math.random() * Math.PI * 2;
+          const mag = 0.45 + Math.random() * 0.4;
+          this._glanceVec = { x: Math.cos(ang) * mag, y: Math.sin(ang) * mag * 0.6 };
+          this._glanceUntil = now + 280 + Math.random() * 320; // brief
+          this._nextGlanceAt = this._glanceUntil + 45000 + Math.random() * 30000;
+        }
+        // During a glance, aim at the glance vector; else centre.
+        if ((this._glanceUntil || 0) > now && this._glanceVec) {
+          gx = this._glanceVec.x;
+          gy = this._glanceVec.y;
+        }
+      }
+
+      const targetRY =  gx * maxAng;
+      const targetRX = -gy * maxAng;
+      // Single shared spring so both eyes are pixel-identical.
+      const eyeK = 1 - Math.pow(hasInput ? 0.0004 : 0.0009, dt);
+      this._eyeCurRX = (this._eyeCurRX || 0) + (targetRX - (this._eyeCurRX || 0)) * eyeK;
+      this._eyeCurRY = (this._eyeCurRY || 0) + (targetRY - (this._eyeCurRY || 0)) * eyeK;
       for (const e of this.eyes) {
-        const idleX = Math.sin(t * 0.55 + e.idleSeed) * 0.45
-                    + Math.sin(t * 1.7 + e.idleSeed * 2.1) * 0.18;
-        const idleY = Math.cos(t * 0.7 + e.idleSeed * 1.3) * 0.30;
-        const blendX = tx * (1 - idleAmt) + idleX * idleAmt;
-        const blendY = ty * (1 - idleAmt) + idleY * idleAmt;
-        const targetRY =  blendX * maxAng;
-        const targetRX = -blendY * maxAng;
-        e.curRX += (targetRX - e.curRX) * eyeK;
-        e.curRY += (targetRY - e.curRY) * eyeK;
-        e.mesh.rotation.x = e.curRX;
-        e.mesh.rotation.y = e.curRY;
+        e.mesh.rotation.x = this._eyeCurRX;
+        e.mesh.rotation.y = this._eyeCurRY;
         e.mat.uniforms.uTime.value = t;
       }
     }
